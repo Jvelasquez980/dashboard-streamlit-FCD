@@ -3,6 +3,9 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+from groq import Groq
+import json
+from datetime import datetime
 
 # ============================================================
 # CONFIGURACIÓN DE LA PÁGINA
@@ -106,6 +109,14 @@ if uploaded_file is not None:
         mime='text/csv',
     )
     
+    # API Key de Groq para informes IA
+    st.sidebar.subheader('🤖 Informes con IA')
+    groq_api_key = st.sidebar.text_input(
+        'API Key de Groq (opcional):',
+        type='password',
+        help='Ingresa tu API key de Groq para generar informes con IA. Obtén una gratis en https://console.groq.com'
+    )
+    
     # Mostrar vista previa de los datos
     st.subheader('📋 Vista Previa de los Datos')
     col_info1, col_info2, col_info3 = st.columns(3)
@@ -132,7 +143,7 @@ if uploaded_file is not None:
     # ============================================================
     # TABS PARA LOS 3 BLOQUES PRINCIPALES
     # ============================================================
-    tab1, tab2, tab3 = st.tabs(['📝 Variables Cualitativas', '📈 Variables Cuantitativas', '📊 Gráficos Avanzados'])
+    tab1, tab2, tab3, tab4 = st.tabs(['📝 Variables Cualitativas', '📈 Variables Cuantitativas', '📊 Gráficos Avanzados', '🤖 Informes IA'])
     
     # ============================================================
     # BLOQUE 1: VARIABLES CUALITATIVAS
@@ -470,6 +481,276 @@ if uploaded_file is not None:
                     st.info('Selecciona al menos 2 variables.')
             else:
                 st.warning('Se necesitan al menos 2 variables numéricas.')
+    
+    # ============================================================
+    # BLOQUE 4: INFORMES CON IA
+    # ============================================================
+    with tab4:
+        st.header('Informes Detallados con IA')
+        
+        if groq_api_key:
+            try:
+                # Inicializar cliente de Groq
+                client = Groq(api_key=groq_api_key)
+                
+                st.success('✅ API Key configurada correctamente')
+                
+                # Tipo de informe
+                report_type = st.selectbox(
+                    'Selecciona el tipo de informe:',
+                    ['Análisis Exploratorio Completo', 
+                     'Análisis de Variable Específica',
+                     'Insights y Recomendaciones',
+                     'Análisis de Correlaciones',
+                     'Detección de Anomalías']
+                )
+                
+                # Configuración adicional según el tipo de informe
+                if report_type == 'Análisis de Variable Específica':
+                    all_cols = selected_columns
+                    var_to_analyze = st.selectbox('Selecciona la variable:', all_cols)
+                
+                # Nivel de detalle
+                detail_level = st.select_slider(
+                    'Nivel de detalle del informe:',
+                    options=['Resumido', 'Normal', 'Detallado', 'Muy Detallado'],
+                    value='Normal'
+                )
+                
+                # Botón para generar informe
+                if st.button('🚀 Generar Informe', type='primary', use_container_width=True):
+                    with st.spinner('Generando informe con IA... Esto puede tomar unos momentos.'):
+                        
+                        # Preparar estadísticas del dataset
+                        stats_summary = {
+                            'filas': int(df_filtered.shape[0]),
+                            'columnas': int(df_filtered.shape[1]),
+                            'columnas_numericas': len(numeric_cols),
+                            'columnas_categoricas': len(categorical_cols)
+                        }
+                        
+                        # Estadísticas básicas
+                        if len(numeric_cols) > 0:
+                            stats_summary['estadisticas_numericas'] = df_filtered[numeric_cols].describe().to_dict()
+                        
+                        if len(categorical_cols) > 0:
+                            stats_summary['estadisticas_categoricas'] = {}
+                            for col in categorical_cols[:5]:  # Limitar a 5 para no saturar
+                                stats_summary['estadisticas_categoricas'][col] = {
+                                    'valores_unicos': int(df_filtered[col].nunique()),
+                                    'top_valores': df_filtered[col].value_counts().head(5).to_dict()
+                                }
+                        
+                        # Correlaciones si hay variables numéricas
+                        if len(numeric_cols) > 1:
+                            corr_matrix = df_filtered[numeric_cols].corr()
+                            # Top 5 correlaciones más fuertes
+                            corr_pairs = []
+                            for i in range(len(corr_matrix.columns)):
+                                for j in range(i+1, len(corr_matrix.columns)):
+                                    corr_pairs.append({
+                                        'var1': corr_matrix.columns[i],
+                                        'var2': corr_matrix.columns[j],
+                                        'corr': float(corr_matrix.iloc[i, j])
+                                    })
+                            corr_pairs.sort(key=lambda x: abs(x['corr']), reverse=True)
+                            stats_summary['top_correlaciones'] = corr_pairs[:5]
+                        
+                        # Construir el prompt según el tipo de informe
+                        if report_type == 'Análisis Exploratorio Completo':
+                            prompt = f"""Eres un analista de datos experto. Genera un informe de análisis exploratorio completo basado en los siguientes datos:
+
+Estadísticas del Dataset:
+{json.dumps(stats_summary, indent=2, ensure_ascii=False)}
+
+Columnas disponibles: {', '.join(selected_columns)}
+
+Nivel de detalle: {detail_level}
+
+Por favor, proporciona:
+1. Resumen ejecutivo del dataset
+2. Análisis de variables numéricas (distribuciones, outliers, tendencias)
+3. Análisis de variables categóricas (frecuencias, patrones)
+4. Análisis de correlaciones y relaciones entre variables
+5. Hallazgos clave e insights
+6. Recomendaciones para análisis posteriores
+
+Formatea el informe en Markdown con secciones claras."""
+                        
+                        elif report_type == 'Análisis de Variable Específica':
+                            var_stats = {}
+                            if var_to_analyze in numeric_cols:
+                                var_stats = df_filtered[var_to_analyze].describe().to_dict()
+                                var_stats['tipo'] = 'numérica'
+                            else:
+                                var_stats = {
+                                    'tipo': 'categórica',
+                                    'valores_unicos': int(df_filtered[var_to_analyze].nunique()),
+                                    'distribucion': df_filtered[var_to_analyze].value_counts().head(10).to_dict()
+                                }
+                            
+                            prompt = f"""Eres un analista de datos experto. Genera un informe detallado sobre la variable '{var_to_analyze}'.
+
+Estadísticas de la variable:
+{json.dumps(var_stats, indent=2, ensure_ascii=False)}
+
+Nivel de detalle: {detail_level}
+
+Por favor, proporciona:
+1. Descripción general de la variable
+2. Análisis de distribución
+3. Identificación de valores atípicos o anomalías
+4. Patrones y tendencias observadas
+5. Relación con otras variables (si es relevante)
+6. Recomendaciones de uso o tratamiento
+
+Formatea el informe en Markdown."""
+                        
+                        elif report_type == 'Insights y Recomendaciones':
+                            prompt = f"""Eres un analista de datos experto. Basándote en las siguientes estadísticas, genera insights accionables y recomendaciones:
+
+Estadísticas del Dataset:
+{json.dumps(stats_summary, indent=2, ensure_ascii=False)}
+
+Columnas: {', '.join(selected_columns)}
+
+Nivel de detalle: {detail_level}
+
+Por favor, proporciona:
+1. Top 5 insights más importantes del dataset
+2. Oportunidades de análisis identificadas
+3. Recomendaciones de mejora de calidad de datos
+4. Sugerencias de visualizaciones adicionales
+5. Próximos pasos recomendados
+
+Formatea el informe en Markdown."""
+                        
+                        elif report_type == 'Análisis de Correlaciones':
+                            prompt = f"""Eres un analista de datos experto. Analiza las correlaciones entre variables:
+
+Estadísticas del Dataset:
+{json.dumps(stats_summary, indent=2, ensure_ascii=False)}
+
+Nivel de detalle: {detail_level}
+
+Por favor, proporciona:
+1. Análisis de las correlaciones más fuertes
+2. Interpretación de las relaciones encontradas
+3. Correlaciones inesperadas o interesantes
+4. Advertencias sobre posibles correlaciones espurias
+5. Recomendaciones para análisis de causalidad
+
+Formatea el informe en Markdown."""
+                        
+                        else:  # Detección de Anomalías
+                            prompt = f"""Eres un analista de datos experto. Basándote en las estadísticas, identifica posibles anomalías y problemas en los datos:
+
+Estadísticas del Dataset:
+{json.dumps(stats_summary, indent=2, ensure_ascii=False)}
+
+Nivel de detalle: {detail_level}
+
+Por favor, proporciona:
+1. Valores atípicos detectados en variables numéricas
+2. Patrones inusuales en variables categóricas
+3. Problemas de calidad de datos identificados
+4. Distribuciones anómalas
+5. Recomendaciones de limpieza y preprocesamiento
+
+Formatea el informe en Markdown."""
+                        
+                        try:
+                            # Llamar a la API de Groq
+                            chat_completion = client.chat.completions.create(
+                                messages=[
+                                    {
+                                        "role": "system",
+                                        "content": "Eres un analista de datos experto que genera informes detallados, claros y accionables en español."
+                                    },
+                                    {
+                                        "role": "user",
+                                        "content": prompt
+                                    }
+                                ],
+                                model="llama-3.3-70b-versatile",
+                                temperature=0.7,
+                                max_tokens=4000
+                            )
+                            
+                            # Obtener el informe generado
+                            report_content = chat_completion.choices[0].message.content
+                            
+                            # Mostrar el informe
+                            st.subheader('📄 Informe Generado')
+                            st.markdown(report_content)
+                            
+                            # Preparar el informe para descarga
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            report_filename = f"informe_{report_type.replace(' ', '_').lower()}_{timestamp}.md"
+                            
+                            # Agregar metadatos al informe
+                            full_report = f"""# {report_type}
+**Generado:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+**Dataset:** {uploaded_file.name}
+**Filas analizadas:** {df_filtered.shape[0]}
+**Columnas analizadas:** {len(selected_columns)}
+**Nivel de detalle:** {detail_level}
+
+---
+
+{report_content}
+
+---
+
+*Informe generado automáticamente con IA (Groq)*
+"""
+                            
+                            # Botón de descarga
+                            st.download_button(
+                                label="📥 Descargar Informe (Markdown)",
+                                data=full_report.encode('utf-8'),
+                                file_name=report_filename,
+                                mime='text/markdown',
+                                use_container_width=True
+                            )
+                            
+                            # También ofrecer descarga en texto plano
+                            st.download_button(
+                                label="📥 Descargar Informe (TXT)",
+                                data=full_report.encode('utf-8'),
+                                file_name=report_filename.replace('.md', '.txt'),
+                                mime='text/plain',
+                                use_container_width=True
+                            )
+                            
+                        except Exception as e:
+                            st.error(f'❌ Error al generar el informe: {str(e)}')
+                            st.info('Verifica que tu API key sea correcta y tenga créditos disponibles.')
+            
+            except Exception as e:
+                st.error(f'❌ Error al conectar con Groq: {str(e)}')
+                st.info('Verifica que tu API key sea válida.')
+        
+        else:
+            st.info('🔑 Para generar informes con IA, ingresa tu API Key de Groq en la barra lateral.')
+            st.markdown("""
+            ### ¿Cómo obtener una API Key de Groq?
+            
+            1. Visita [https://console.groq.com](https://console.groq.com)
+            2. Crea una cuenta gratuita
+            3. Genera una nueva API Key
+            4. Copia y pega la clave en el campo de la barra lateral
+            
+            ### ¿Qué tipos de informes puedes generar?
+            
+            - **Análisis Exploratorio Completo:** Resumen integral del dataset
+            - **Análisis de Variable Específica:** Análisis profundo de una columna
+            - **Insights y Recomendaciones:** Hallazgos clave y próximos pasos
+            - **Análisis de Correlaciones:** Relaciones entre variables
+            - **Detección de Anomalías:** Identificación de outliers y problemas
+            
+            Todos los informes son descargables en formato Markdown y TXT.
+            """)
 
 else:
     st.info('👆 Por favor, carga un archivo CSV desde la barra lateral para comenzar el análisis.')
